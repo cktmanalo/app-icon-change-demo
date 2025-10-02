@@ -12,9 +12,10 @@ import android.content.pm.PackageManager.DONT_KILL_APP
 import android.content.pm.PackageManager.GET_ACTIVITIES
 import android.content.pm.PackageManager.GET_META_DATA
 import android.content.pm.PackageManager.MATCH_DISABLED_COMPONENTS
+import android.os.Build
 import android.os.Bundle
 
-internal class IconChangeManager(private val activity: Activity) {
+internal class IconChangeManager(private val activity: Activity, private val launchApp: Boolean) {
 
     private val currentInit: ActivityAlias
     private val initialAlias: ActivityAlias
@@ -28,28 +29,51 @@ internal class IconChangeManager(private val activity: Activity) {
             .filter { activityInfo -> activityInfo.isIconChangeAlias }
             .map { activityInfo -> ActivityAlias(activityInfo) }
 
+        val aliasesEnabled = activity.getActivitiesFromManifest()
+            .filter { activityInfo -> activityInfo.enabled }
+            .map { activityInfo -> ActivityAlias(activityInfo) }
+
+        val listAlias = activity.getActivitiesFromManifest()
+            .map { activityInfo -> ActivityAlias(activityInfo) }
+
+        println("aliases $aliases")
+        println("aliasesEnabled $aliasesEnabled")
+        println("listAlias $listAlias")
         val componentEnabled = aliases.filter { it.isComponentEnabled }
+        val aliasEnabled = aliases.filter { it.isEnabledInManifest }
+
+        println("Component Size ${componentEnabled.size}")
+        println("aliasEnabled Size ${aliasEnabled.size}")
         currentInit = when (componentEnabled.size) {
             1 -> componentEnabled[0]
-            0 -> error("No alias component currently enabled")
+            0 -> if (launchApp) aliasEnabled[0] else error("No alias component currently enabled")
             else -> error("Multiple alias components currently enabled")
         }
 
-        val (enabled, disabled) = aliases.partition { it.isEnabledInManifest }
+        val (enabled, disabled) = if (launchApp) aliasEnabled.partition { it.isEnabledInManifest }
+            else aliases.partition { it.isEnabledInManifest }
+        println("enabled.size ${enabled.size}")
         initialAlias = when (enabled.size) {
             1 -> enabled[0]
             0 -> error("No initial alias enabled in manifest")
             else -> error("Multiple aliases enabled in manifest")
         }
+        println("disabled.size ${disabled.size}")
 
-        val sameIcon = disabled.filter { it.icon == initialAlias.icon }
-        cloneInitialAlias = when (sameIcon.size) {
-            1 -> sameIcon[0]
-            0 -> error("No clone initial alias found")
-            else -> error("Multiple clone initial aliases found")
+        if (launchApp) {
+            selectableAliases = enabled
+            cloneInitialAlias = enabled[0]
+        } else {
+            val sameIcon = disabled.filter { it.icon == initialAlias.icon }
+            println("sameIcon.size ${sameIcon.size}")
+            cloneInitialAlias = when (sameIcon.size) {
+                1 -> sameIcon[0]
+                0 -> error("No clone initial alias found")
+                else -> error("Multiple clone initial aliases found")
+            }
+
+            selectableAliases = disabled
         }
-
-        selectableAliases = disabled
     }
 
     var currentAlias: ActivityAlias = currentInit
@@ -67,6 +91,8 @@ internal class IconChangeManager(private val activity: Activity) {
     fun onSaveInstanceState(outState: Bundle) {
         if (isChangingIcon) outState.putBoolean(EXTRA_IS_CHANGING_ICON, true)
     }
+
+    var isIconHide: Boolean = false
 
     var isIconChangeActivated: Boolean = !initialAlias.isComponentEnabled
         set(activated) {
@@ -132,6 +158,28 @@ internal class IconChangeManager(private val activity: Activity) {
             }
             manager.setComponentEnabledSetting(component, state, DONT_KILL_APP)
         }
+
+    fun hideUnHideIcon(boolean: Boolean, context: Context) {
+        val manager = activity.packageManager
+        val component = ComponentName(activity.applicationContext, currentAlias.name)
+        val components = ComponentName.createRelative(activity.applicationContext,
+            currentAlias.name)
+        val state : Int = if (boolean) COMPONENT_ENABLED_STATE_DISABLED else
+            COMPONENT_ENABLED_STATE_ENABLED
+        println("hideUnHideIcon state : $state")
+        println("hideUnHideIcon components : $component")
+        manager.setComponentEnabledSetting(
+            component,
+            state,
+            DONT_KILL_APP
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            Thread {
+                Thread.sleep(2000)
+                restartApp(context, activity.packageName)
+            }.start()
+        }
+    }
 }
 
 private fun Context.getActivitiesFromManifest(): Array<out ActivityInfo> {
